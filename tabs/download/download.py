@@ -17,6 +17,7 @@ from core import run_download_script
 from rvc.lib.utils import format_title
 
 from assets.i18n.i18n import I18nAuto
+from assets.app_shell import step_card
 
 i18n = I18nAuto()
 
@@ -29,7 +30,9 @@ if os.path.exists(gradio_temp_dir):
 def save_drop_model(dropbox):
     if "pth" not in dropbox and "index" not in dropbox:
         raise gr.Error(
-            message="The file you dropped is not a valid model file. Please try again."
+            message=i18n(
+                "The file you dropped is not a valid model file. Please try again."
+            )
         )
 
     file_name = format_title(os.path.basename(dropbox))
@@ -50,7 +53,7 @@ def save_drop_model(dropbox):
         os.remove(os.path.join(model_path, file_name))
     shutil.move(dropbox, os.path.join(model_path, file_name))
     print(f"{file_name} saved in {model_path}")
-    gr.Info(f"{file_name} saved in {model_path}")
+    gr.Info(i18n("{} saved in {}").format(file_name, model_path))
 
     return None
 
@@ -183,30 +186,39 @@ def download_handler(is_custom, model, sample_rate, url_g, url_d):
 
 
 def download_tab():
-    with gr.Column():
-        gr.Markdown(value=i18n("## Download Model"))
+    def _download_with_toast(*args):
+        gr.Info(i18n("Downloading model..."))
+        result = run_download_script(*args)
+        if isinstance(result, str):
+            if "error" in result.lower() or "failed" in result.lower():
+                gr.Warning(result)
+            else:
+                gr.Info(result)
+        return result
+
+    with step_card(1, "Download Model", i18n, description="Paste a model link to download it into your library."):
         model_link = gr.Textbox(
             label=i18n("Model Link"),
             placeholder=i18n("Introduce the model link"),
             interactive=True,
         )
         model_download_output_info = gr.Textbox(
-            label=i18n("Output Information"),
+            label=i18n("Download output"),
             info=i18n("The output information will be displayed here."),
             value="",
             max_lines=8,
             interactive=False,
         )
-        model_download_button = gr.Button(i18n("Download Model"))
+        model_download_button = gr.Button(i18n("Download Model"), variant="primary")
         model_download_button.click(
-            fn=run_download_script,
+            fn=_download_with_toast,
             inputs=[model_link],
             outputs=[model_download_output_info],
         )
-        gr.Markdown(value=i18n("## Drop files"))
+    with step_card(2, "Drop Files", i18n, description="Drop .pth and .index files to import them manually."):
         dropbox = gr.File(
             label=i18n(
-                "Drag your .pth file and .index file into this space. Drag one and then the other."
+                "Drop your .pth and .index files here or use the browse button. Drop one and then the other."
             ),
             type="filepath",
         )
@@ -216,10 +228,9 @@ def download_tab():
             inputs=[dropbox],
             outputs=[dropbox],
         )
-        gr.Markdown(value=i18n("## Download Pretrained Models"))
-
-        with gr.Group():
-            with gr.Group(visible=True) as default:
+    with step_card(3, "Download Pretrained Models", i18n, description="Download base pretrained models or use custom URLs."):
+        with gr.Column():
+            with gr.Column(visible=True) as default:
                 pretrained_model = gr.Dropdown(
                     label=i18n("Pretrained"),
                     info=i18n("Select the pretrained model you want to download."),
@@ -236,7 +247,7 @@ def download_tab():
                     allow_custom_value=True,
                 )
 
-            with gr.Group(visible=False) as custom:
+            with gr.Column(visible=False) as custom:
                 url_g = gr.Textbox(label=i18n("Pretrained G"), interactive=True)
                 url_d = gr.Textbox(label=i18n("Pretrained D"), interactive=True)
 
@@ -246,7 +257,7 @@ def download_tab():
                 interactive=True,
             )
 
-        download_pretrained = gr.Button(i18n("Download"))
+        download_pretrained = gr.Button(i18n("Download"), variant="primary")
 
         pretrained_model.change(
             update_sample_rate_dropdown,

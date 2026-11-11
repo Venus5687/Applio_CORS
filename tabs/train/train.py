@@ -7,6 +7,7 @@ from multiprocessing import cpu_count
 import gradio as gr
 
 from assets.i18n.i18n import I18nAuto
+from assets.app_shell import step_card
 from core import (
     run_extract_script,
     run_index_script,
@@ -70,8 +71,14 @@ pretraineds_list_g = get_pretrained_list("G")
 
 def refresh_custom_pretraineds():
     return (
-        {"choices": sorted(get_pretrained_list("G")), "__type__": "update"},
-        {"choices": sorted(get_pretrained_list("D")), "__type__": "update"},
+        {
+            "choices": path_choices(sorted(get_pretrained_list("G"))),
+            "__type__": "update",
+        },
+        {
+            "choices": path_choices(sorted(get_pretrained_list("D"))),
+            "__type__": "update",
+        },
     )
 
 
@@ -93,7 +100,7 @@ def get_datasets_list():
 
 
 def refresh_datasets():
-    return {"choices": sorted(get_datasets_list()), "__type__": "update"}
+    return {"choices": path_choices(sorted(get_datasets_list())), "__type__": "update"}
 
 
 # Model Names
@@ -117,8 +124,32 @@ def refresh_models():
 def refresh_models_and_datasets():
     return (
         {"choices": sorted(get_models_list()), "__type__": "update"},
-        {"choices": sorted(get_datasets_list()), "__type__": "update"},
+        {"choices": path_choices(sorted(get_datasets_list())), "__type__": "update"},
     )
+
+
+def display_name(path):
+    """Dropdown label for a path: the file or folder name, without extension."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def path_choices(paths):
+    """
+    Convert a list of paths into (label, value) dropdown choices so only the
+    file name is displayed and announced instead of the full relative path.
+    The order of `paths` is preserved, and duplicate names are disambiguated
+    by appending the parent folder name.
+    """
+    names = [display_name(path) for path in paths]
+    counts = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    choices = []
+    for name, path in zip(names, paths):
+        if counts[name] > 1:
+            name = f"{name} ({os.path.basename(os.path.dirname(path))})"
+        choices.append((name, path))
+    return choices
 
 
 # Refresh Custom Embedders
@@ -159,12 +190,16 @@ def save_drop_model(dropbox):
 # Drop Dataset
 def save_drop_dataset_audio(dropbox, dataset_name):
     if not dataset_name:
-        gr.Info("Please enter a valid dataset name. Please try again.")
+        gr.Info(i18n("Please enter a valid dataset name. Please try again."))
         return None, None
     else:
         file_extension = os.path.splitext(dropbox)[1][1:].lower()
         if file_extension not in sup_audioext:
-            gr.Info("The file you dropped is not a valid audio file. Please try again.")
+            gr.Info(
+                i18n(
+                    "The file you dropped is not a valid audio file. Please try again."
+                )
+            )
         else:
             dataset_name = format_title(dataset_name)
             audio_file = format_title(os.path.basename(dropbox))
@@ -242,8 +277,8 @@ def get_index_list():
 
 def refresh_pth_and_index_list():
     return (
-        {"choices": sorted(get_pth_list()), "__type__": "update"},
-        {"choices": sorted(get_index_list()), "__type__": "update"},
+        {"choices": path_choices(sorted(get_pth_list())), "__type__": "update"},
+        {"choices": path_choices(sorted(get_index_list())), "__type__": "update"},
     )
 
 
@@ -279,12 +314,12 @@ def export_index(index_path):
 # Upload to Google Drive
 def upload_to_google_drive(pth_path, index_path, model_name):
     if not os.path.exists(os.path.join(models_path, model_name)):
-        return gr.Info("Model folder not found.")
+        return gr.Info(i18n("Model folder not found."))
     if not pth_path or not os.path.exists(pth_path):
-        return gr.Info(".pth not found.")
+        return gr.Info(i18n(".pth not found."))
     try:
         zip_path = f"{model_name}.zip"
-        gr.Info("Uploading...")
+        gr.Info(i18n("Uploading..."))
         with zipfile.ZipFile(zip_path, "w") as zipf:
             zipf.write(pth_path, os.path.basename(pth_path))
             if index_path and os.path.exists(index_path):
@@ -295,10 +330,10 @@ def upload_to_google_drive(pth_path, index_path, model_name):
         if os.path.exists(dest):
             os.remove(dest)
         shutil.move(zip_path, dest)
-        gr.Info("Uploaded.")
+        gr.Info(i18n("Uploaded."))
     except Exception as error:
         print(f"An error occurred uploading to Google Drive: {error}")
-        gr.Info("Upload failed.")
+        gr.Info(i18n("Upload failed."))
 
 
 def auto_enable_checkpointing():
@@ -310,8 +345,28 @@ def auto_enable_checkpointing():
 
 # Train Tab
 def train_tab():
+    def _preprocess_with_toast(*args):
+        gr.Info(i18n("Preprocessing dataset..."))
+        result = run_preprocess_script(*args)
+        if isinstance(result, str):
+            if "error" in result.lower() or "failed" in result.lower():
+                gr.Warning(result)
+            else:
+                gr.Info(result)
+        return result
+
+    def _extract_with_toast(*args):
+        gr.Info(i18n("Extracting features..."))
+        result = run_extract_script(*args)
+        if isinstance(result, str):
+            if "error" in result.lower() or "failed" in result.lower():
+                gr.Warning(result)
+            else:
+                gr.Info(result)
+        return result
+
     # Model settings section
-    with gr.Accordion(i18n("Model Settings")):
+    with step_card(1, "Model Settings", i18n, description="Name your model and choose sample rate, architecture and hardware."):
         with gr.Row():
             with gr.Column():
                 model_name = gr.Dropdown(
@@ -322,7 +377,8 @@ def train_tab():
                     interactive=True,
                     allow_custom_value=True,
                 )
-                architecture = gr.Radio(
+                architecture = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Architecture"),
                     info=i18n(
                         "Choose the model architecture:\n- **RVC (V2)**: Default option, compatible with all clients.\n- **Applio**: Advanced quality with improved vocoders and higher sample rates, Applio-only."
@@ -333,14 +389,16 @@ def train_tab():
                     visible=False,
                 )
             with gr.Column():
-                sampling_rate = gr.Radio(
+                sampling_rate = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Sampling Rate"),
                     info=i18n("The sampling rate of the audio files."),
                     choices=["32000", "40000", "48000"],
                     value="40000",
                     interactive=True,
                 )
-                vocoder = gr.Radio(
+                vocoder = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Vocoder"),
                     info=i18n(
                         "Choose the vocoder for audio synthesis:\n- **HiFi-GAN**: Default option, compatible with all clients.\n- **MRF HiFi-GAN**: Higher fidelity, Applio-only.\n- **RefineGAN**: Superior audio quality, Applio-only."
@@ -374,7 +432,7 @@ def train_tab():
                         info=i18n(
                             "Specify the number of GPUs you wish to utilize for extracting by entering them separated by hyphens (-)."
                         ),
-                        placeholder=i18n("0 to ∞ separated by -"),
+                        placeholder=i18n("0 to âˆž separated by -"),
                         value=str(get_number_of_gpus()),
                         interactive=True,
                     )
@@ -385,12 +443,12 @@ def train_tab():
                         interactive=False,
                     )
     # Preprocess section
-    with gr.Accordion(i18n("Preprocess")):
+    with step_card(2, "Prepare Dataset", i18n, description="Point to your dataset, clean it and preprocess audio slices."):
         dataset_path = gr.Dropdown(
             label=i18n("Dataset Path"),
             info=i18n("Path to the dataset folder."),
             # placeholder=i18n("Enter dataset path"),
-            choices=get_datasets_list(),
+            choices=path_choices(get_datasets_list()),
             allow_custom_value=True,
             interactive=True,
         )
@@ -413,10 +471,11 @@ def train_tab():
                     type="filepath",
                     interactive=True,
                 )
-        refresh = gr.Button(i18n("Refresh"))
+        refresh = gr.Button(i18n("Refresh models and datasets"))
 
         with gr.Accordion(i18n("Advanced Settings"), open=False):
-            cut_preprocess = gr.Radio(
+            cut_preprocess = gr.Dropdown(
+                filterable=False,
                 label=i18n("Audio cutting"),
                 info=i18n(
                     "Audio file slicing method: Select 'Skip' if the files are already pre-sliced, 'Simple' if excessive silence has already been removed from the files, or 'Automatic' for automatic silence detection and slicing around it."
@@ -458,7 +517,8 @@ def train_tab():
                     visible=True,
                 )
 
-                normalization_mode = gr.Radio(
+                normalization_mode = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Normalization mode"),
                     info=i18n(
                         "Audio normalization: Select 'none' if the files are already normalized, 'pre' to normalize the entire input file at once, or 'post' to normalize each slice individually."
@@ -469,28 +529,8 @@ def train_tab():
                     visible=True,
                 )
 
-                noise_reduction = gr.Checkbox(
-                    label=i18n("Noise Reduction"),
-                    info=i18n(
-                        "It's recommended keep deactivate this option if your dataset has already been processed."
-                    ),
-                    value=False,
-                    interactive=True,
-                    visible=True,
-                )
-            clean_strength = gr.Slider(
-                minimum=0,
-                maximum=1,
-                label=i18n("Noise Reduction Strength"),
-                info=i18n(
-                    "Set the clean-up level to the audio you want, the more you increase it the more it will clean up, but it is possible that the audio will be more compressed."
-                ),
-                visible=False,
-                value=0.5,
-                interactive=True,
-            )
         preprocess_output_info = gr.Textbox(
-            label=i18n("Output Information"),
+            label=i18n("Preprocess output"),
             info=i18n("The output information will be displayed here."),
             value="",
             max_lines=8,
@@ -498,9 +538,9 @@ def train_tab():
         )
 
         with gr.Row():
-            preprocess_button = gr.Button(i18n("Preprocess Dataset"))
+            preprocess_button = gr.Button(i18n("Preprocess Dataset"), variant="primary")
             preprocess_button.click(
-                fn=run_preprocess_script,
+                fn=_preprocess_with_toast,
                 inputs=[
                     model_name,
                     dataset_path,
@@ -508,8 +548,6 @@ def train_tab():
                     cpu_cores,
                     cut_preprocess,
                     process_effects,
-                    noise_reduction,
-                    clean_strength,
                     chunk_len,
                     overlap_len,
                     normalization_mode,
@@ -518,16 +556,16 @@ def train_tab():
             )
 
     # Extract section
-    with gr.Accordion(i18n("Extract")):
+    with step_card(3, "Extract Features", i18n, description="Extract pitch and embeddings used for training."):
         with gr.Row():
-            f0_method = gr.Radio(
+            f0_method = gr.Dropdown(
+                filterable=False,
                 label=i18n("Pitch extraction algorithm"),
                 info=i18n(
                     "Pitch extraction algorithm to use for the audio conversion. The default algorithm is rmvpe, which is recommended for most cases."
                 ),
                 choices=[
                     "crepe",
-                    "crepe-tiny",
                     "rmvpe",
                     # "fcpe"
                 ],
@@ -535,7 +573,8 @@ def train_tab():
                 interactive=True,
             )
 
-            embedder_model = gr.Radio(
+            embedder_model = gr.Dropdown(
+                filterable=False,
                 label=i18n("Embedder Model"),
                 info=i18n("Model used for learning speaker embedding."),
                 choices=[
@@ -567,7 +606,7 @@ def train_tab():
                 with gr.Row():
                     embedder_model_custom = gr.Dropdown(
                         label=i18n("Select Custom Embedder"),
-                        choices=refresh_embedders_folders(),
+                        choices=path_choices(refresh_embedders_folders()),
                         interactive=True,
                         allow_custom_value=True,
                     )
@@ -587,15 +626,15 @@ def train_tab():
                 )
 
         extract_output_info = gr.Textbox(
-            label=i18n("Output Information"),
+            label=i18n("Feature extraction output"),
             info=i18n("The output information will be displayed here."),
             value="",
             max_lines=8,
             interactive=False,
         )
-        extract_button = gr.Button(i18n("Extract Features"))
+        extract_button = gr.Button(i18n("Extract Features"), variant="primary")
         extract_button.click(
-            fn=run_extract_script,
+            fn=_extract_with_toast,
             inputs=[
                 model_name,
                 f0_method,
@@ -610,7 +649,7 @@ def train_tab():
         )
 
     # Training section
-    with gr.Accordion(i18n("Training")):
+    with step_card(4, "Train Model", i18n, description="Configure epochs and batch size, then start training."):
         with gr.Row():
             batch_size = gr.Slider(
                 1,
@@ -728,7 +767,7 @@ def train_tab():
                             info=i18n(
                                 "Select the custom pretrained model for the generator."
                             ),
-                            choices=sorted(pretraineds_list_g),
+                            choices=path_choices(sorted(pretraineds_list_g)),
                             interactive=True,
                             allow_custom_value=True,
                         )
@@ -737,12 +776,13 @@ def train_tab():
                             info=i18n(
                                 "Select the custom pretrained model for the discriminator."
                             ),
-                            choices=sorted(pretraineds_list_d),
+                            choices=path_choices(sorted(pretraineds_list_d)),
                             interactive=True,
                             allow_custom_value=True,
                         )
 
-            index_algorithm = gr.Radio(
+            index_algorithm = gr.Dropdown(
+                filterable=False,
                 label=i18n("Index Algorithm"),
                 info=i18n(
                     "KMeans is a clustering algorithm that divides the dataset into K clusters. This setting is particularly useful for large datasets."
@@ -754,9 +794,10 @@ def train_tab():
 
         def enforce_terms(terms_accepted, *args):
             if not terms_accepted:
-                message = "You must agree to the Terms of Use to proceed."
+                message = i18n("You must agree to the Terms of Use to proceed.")
                 gr.Info(message)
                 return message
+            gr.Info(i18n("Training started..."))
             return run_train_script(*args)
 
         terms_checkbox = gr.Checkbox(
@@ -768,7 +809,7 @@ def train_tab():
             interactive=True,
         )
         train_output_info = gr.Textbox(
-            label=i18n("Output Information"),
+            label=i18n("Training output"),
             info=i18n("The output information will be displayed here."),
             value="",
             max_lines=8,
@@ -776,7 +817,7 @@ def train_tab():
         )
 
         with gr.Row():
-            train_button = gr.Button(i18n("Start Training"))
+            train_button = gr.Button(i18n("Start Training"), variant="primary")
 
             stop_train_button = gr.Button(i18n("Stop Training"), visible=False)
             stop_train_button.click(
@@ -793,7 +834,7 @@ def train_tab():
             )
 
     # Export Model section
-    with gr.Accordion(i18n("Export Model"), open=False):
+    with step_card(5, "Export Model", i18n, description="Select trained files to export or upload."):
         if os.getenv("COLAB_RELEASE_TAG"):
             gr.Markdown(
                 i18n(
@@ -811,7 +852,7 @@ def train_tab():
                 pth_dropdown_export = gr.Dropdown(
                     label=i18n("Pth file"),
                     info=i18n("Select the pth file to be exported"),
-                    choices=get_pth_list(),
+                    choices=path_choices(get_pth_list()),
                     value=None,
                     interactive=True,
                     allow_custom_value=True,
@@ -826,14 +867,14 @@ def train_tab():
                 index_dropdown_export = gr.Dropdown(
                     label=i18n("Index File"),
                     info=i18n("Select the index file to be exported"),
-                    choices=get_index_list(),
+                    choices=path_choices(get_index_list()),
                     value=None,
                     interactive=True,
                     allow_custom_value=True,
                 )
         with gr.Row():
             with gr.Column():
-                refresh_export = gr.Button(i18n("Refresh"))
+                refresh_export = gr.Button(i18n("Refresh trained models and indexes"))
                 if os.getenv("COLAB_RELEASE_TAG"):
                     upload_exported = gr.Button(i18n("Upload"))
                     upload_exported.click(
@@ -861,7 +902,9 @@ def train_tab():
 
             def download_prerequisites():
                 gr.Info(
-                    "Checking for prerequisites with pitch guidance... Missing files will be downloaded. If you already have them, this step will be skipped."
+                    i18n(
+                        "Checking for prerequisites with pitch guidance... Missing files will be downloaded. If you already have them, this step will be skipped."
+                    )
                 )
                 run_prerequisites_script(
                     pretraineds_hifigan=True,
@@ -869,7 +912,9 @@ def train_tab():
                     exe=False,
                 )
                 gr.Info(
-                    "Prerequisites check complete. Missing files were downloaded, and you may now start preprocessing."
+                    i18n(
+                        "Prerequisites check complete. Missing files were downloaded, and you may now start preprocessing."
+                    )
                 )
 
             def toggle_visible_embedder_custom(embedder_model):
@@ -907,14 +952,6 @@ def train_tab():
                         "value": "32000",
                     }
 
-            def update_slider_visibility(noise_reduction):
-                return gr.update(visible=noise_reduction)
-
-            noise_reduction.change(
-                fn=update_slider_visibility,
-                inputs=noise_reduction,
-                outputs=clean_strength,
-            )
             architecture.change(
                 fn=toggle_architecture,
                 inputs=[architecture],
@@ -956,7 +993,9 @@ def train_tab():
                 outputs=[],
             )
             refresh_embedders_button.click(
-                fn=refresh_embedders_folders, inputs=[], outputs=[embedder_model_custom]
+                fn=lambda: gr.update(choices=path_choices(refresh_embedders_folders())),
+                inputs=[],
+                outputs=[embedder_model_custom],
             )
             pretrained.change(
                 fn=toggle_pretrained,
