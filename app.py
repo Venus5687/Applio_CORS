@@ -269,6 +269,7 @@ def launch_gradio(server_name: str, server_port: int) -> None:
 
         app.mount("/api", fastapi_app)
         from fastapi.middleware.cors import CORSMiddleware
+
         if hasattr(demo, "app"):
             demo.app.add_middleware(
                 CORSMiddleware,
